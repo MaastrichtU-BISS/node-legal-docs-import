@@ -26,7 +26,7 @@ export const pdfParser: Parser = {
       throw new Error("not a PDF — the file may have been renamed");
     }
 
-    await useOwnWorker();
+    await preparePdfjs();
     const { getDocument } = await import("pdfjs-dist/legacy/build/pdf.mjs");
     // The teardown lives on the loading task rather than the document, so the
     // task has to be held: destroying it is what releases the worker, and a
@@ -65,6 +65,99 @@ export const pdfParser: Parser = {
     }
   },
 };
+
+/**
+ * Everything pdfjs needs settled before it is imported.
+ *
+ * Both halves exist for the same reason: pdfjs is written to find things for
+ * itself at runtime, and a built server is not a place where that works.
+ */
+async function preparePdfjs(): Promise<void> {
+  ensureRenderingGlobals();
+  await useOwnWorker();
+}
+
+/**
+ * Gives pdfjs the two browser globals its canvas layer needs at import time.
+ *
+ * `pdf.mjs` has `const SCALE_MATRIX = new DOMMatrix()` at module scope. Node
+ * has no DOMMatrix, so pdfjs tries to borrow one from `@napi-rs/canvas` — an
+ * optional native package — and when that is not installed it prints "Cannot
+ * polyfill `DOMMatrix`" and carries on to throw at that line. Importing the
+ * library at all then fails, before any of this package's code runs.
+ *
+ * Installing @napi-rs/canvas would fix it and is the wrong trade: it is a
+ * native module, tens of megabytes, in every platform image, to satisfy a
+ * rendering layer this package never calls. Reading a document's text does not
+ * depend on drawing it — the same reason disableFontFace is set below.
+ *
+ * So the constant gets something to be. Both stand-ins construct and hold
+ * their values, and throw the moment anything asks them to compute: if a code
+ * path that really does render is ever reached, it must fail saying so rather
+ * than quietly returning wrong geometry. Anything already provided — a real
+ * DOMMatrix from @napi-rs/canvas, or a future Node that has one — is left
+ * alone.
+ */
+function ensureRenderingGlobals(): void {
+  const g = globalThis as Record<string, unknown>;
+
+  const unsupported = (): never => {
+    throw new Error(
+      "this build of node-legal-docs-import extracts text and cannot render PDFs — " +
+        "install @napi-rs/canvas if rendering is needed",
+    );
+  };
+
+  if (typeof g["DOMMatrix"] === "undefined") {
+    g["DOMMatrix"] = class {
+      // The identity matrix, which is what `new DOMMatrix()` means. Readable,
+      // so anything inspecting the transform sees sane numbers.
+      a = 1;
+      b = 0;
+      c = 0;
+      d = 1;
+      e = 0;
+      f = 0;
+      constructor(init?: number[] | string) {
+        if (Array.isArray(init) && init.length >= 6) {
+          [this.a, this.b, this.c, this.d, this.e, this.f] = init as [
+            number,
+            number,
+            number,
+            number,
+            number,
+            number,
+          ];
+        }
+      }
+      multiply = unsupported;
+      multiplySelf = unsupported;
+      preMultiplySelf = unsupported;
+      translate = unsupported;
+      translateSelf = unsupported;
+      scale = unsupported;
+      scaleSelf = unsupported;
+      rotate = unsupported;
+      rotateSelf = unsupported;
+      invertSelf = unsupported;
+      transformPoint = unsupported;
+    };
+  }
+
+  if (typeof g["Path2D"] === "undefined") {
+    g["Path2D"] = class {
+      addPath = unsupported;
+      moveTo = unsupported;
+      lineTo = unsupported;
+      bezierCurveTo = unsupported;
+      quadraticCurveTo = unsupported;
+      closePath = unsupported;
+      rect = unsupported;
+      arc = unsupported;
+      ellipse = unsupported;
+    };
+  }
+}
 
 /**
  * Hands pdfjs its worker instead of letting it go and find one.

@@ -75,3 +75,46 @@ describe.skipIf(pdf === null)("the worker pdfjs uses", () => {
     expect(g.pdfjsWorker!.WorkerMessageHandler).toBeDefined();
   });
 });
+
+describe.skipIf(pdf === null)("running where pdfjs cannot draw", () => {
+  // pdf.mjs builds a DOMMatrix at module scope, so importing it at all fails
+  // on a Node without one — which is every Node that does not have the
+  // optional @napi-rs/canvas installed, including the platform image. The
+  // stand-ins have to be in place before that import, and this is the only
+  // part of that which a test outside a container can check.
+  it("supplies the globals pdfjs constructs on import", async () => {
+    const g = globalThis as Record<string, unknown>;
+    const realMatrix = g["DOMMatrix"];
+    const realPath = g["Path2D"];
+    delete g["DOMMatrix"];
+    delete g["Path2D"];
+
+    try {
+      const { documents } = await defaultImporter().import([{ name: "r.pdf", data: pdf! }]);
+      expect(documents).toHaveLength(1);
+
+      expect(g["DOMMatrix"], "pdfjs was left without a DOMMatrix").toBeDefined();
+      const M = g["DOMMatrix"] as new (init?: number[]) => Record<string, unknown>;
+      // Identity, so anything reading the transform sees sane numbers.
+      expect([new M().a, new M().d]).toEqual([1, 1]);
+      expect(new M([2, 0, 0, 2, 5, 5]).e).toBe(5);
+    } finally {
+      if (realMatrix) g["DOMMatrix"] = realMatrix;
+      if (realPath) g["Path2D"] = realPath;
+    }
+  });
+
+  // A stand-in that quietly returned wrong geometry would be worse than none.
+  it("refuses to pretend it can render", async () => {
+    const g = globalThis as Record<string, unknown>;
+    const real = g["DOMMatrix"];
+    delete g["DOMMatrix"];
+    try {
+      await defaultImporter().import([{ name: "r.pdf", data: pdf! }]);
+      const M = g["DOMMatrix"] as new () => { multiply: () => unknown };
+      expect(() => new M().multiply()).toThrow(/cannot render/);
+    } finally {
+      if (real) g["DOMMatrix"] = real;
+    }
+  });
+});
