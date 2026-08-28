@@ -1,6 +1,6 @@
 {
   "name": "node-legal-docs-import",
-  "version": "1.0.4",
+  "version": "1.1.0",
   "description": "Turns uploaded files into documents worth annotating. Text, HTML, Word and PDF, parsed server-side so that character offsets are the same everywhere.",
   "repository": {
     "type": "git",
