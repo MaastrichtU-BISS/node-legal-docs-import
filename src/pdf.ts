@@ -26,6 +26,7 @@ export const pdfParser: Parser = {
       throw new Error("not a PDF — the file may have been renamed");
     }
 
+    await useOwnWorker();
     const { getDocument } = await import("pdfjs-dist/legacy/build/pdf.mjs");
     // The teardown lives on the loading task rather than the document, so the
     // task has to be held: destroying it is what releases the worker, and a
@@ -64,6 +65,31 @@ export const pdfParser: Parser = {
     }
   },
 };
+
+/**
+ * Hands pdfjs its worker instead of letting it go and find one.
+ *
+ * Under Node pdfjs runs the worker on the main thread, and loads its code with
+ * `await import(GlobalWorkerOptions.workerSrc)` — a specifier that defaults to
+ * the relative string "./pdf.worker.mjs". That works from inside node_modules
+ * and breaks the moment anything bundles this package: a bundler can follow an
+ * import, but it cannot follow a string. What it did instead depended on the
+ * bundler — a Nitro build left the file behind entirely ("Cannot find module
+ * .../pdf.worker.mjs"), and inside the platform image it reached the browser
+ * worker, which wants a DOM ("DOMMatrix is not defined"). Both are the same
+ * bug wearing different clothes, and both only appear in a built server, which
+ * is why a dev server and the test suite were happy.
+ *
+ * pdfjs looks at `globalThis.pdfjsWorker` before it resolves anything, so
+ * importing the legacy worker here — by its real specifier, which a bundler
+ * does follow — settles both which file is used and whether it was shipped.
+ */
+async function useOwnWorker(): Promise<void> {
+  const g = globalThis as { pdfjsWorker?: unknown };
+  if (g.pdfjsWorker) return;
+  const { WorkerMessageHandler } = await import("pdfjs-dist/legacy/build/pdf.worker.mjs");
+  g.pdfjsWorker = { WorkerMessageHandler };
+}
 
 function startsWithPdfHeader(data: Uint8Array): boolean {
   const header = "%PDF-";

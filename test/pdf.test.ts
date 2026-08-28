@@ -58,3 +58,20 @@ describe.skipIf(pdf === null)("PDF", () => {
     expect(text).toBe(text.trim());
   });
 });
+
+describe.skipIf(pdf === null)("the worker pdfjs uses", () => {
+  // The bug this guards against only appears in a bundled server, which no
+  // unit test runs in. What can be checked here is the mechanism: pdfjs must
+  // never get as far as resolving a worker for itself, because the specifier
+  // it would resolve is a relative string that bundlers cannot follow. If
+  // globalThis.pdfjsWorker is set, its own lookup is skipped entirely.
+  it("is the one this package hands it, not one pdfjs goes looking for", async () => {
+    const g = globalThis as { pdfjsWorker?: { WorkerMessageHandler?: unknown } };
+    delete g.pdfjsWorker;
+
+    await defaultImporter().import([{ name: "ruling.pdf", data: pdf! }]);
+
+    expect(g.pdfjsWorker, "pdfjs was left to find its own worker").toBeDefined();
+    expect(g.pdfjsWorker!.WorkerMessageHandler).toBeDefined();
+  });
+});
